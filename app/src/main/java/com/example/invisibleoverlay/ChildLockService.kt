@@ -24,12 +24,15 @@ import androidx.core.app.NotificationCompat
 class ChildLockService : Service() {
 
     private lateinit var windowManager: WindowManager
-    private lateinit var overlayView: View
-    private var isOverlayActive = false
+    private lateinit var overlayView: FrameLayout
+    private lateinit var unlockButton: ImageView
+    private lateinit var layoutParams: WindowManager.LayoutParams
+
+    private var isTouchBlocked = false
 
     companion object {
-        const val ACTION_START_LOCK = "ACTION_START_LOCK"
-        const val ACTION_STOP_LOCK = "ACTION_STOP_LOCK"
+        const val ACTION_FORCE_LOCK = "ACTION_FORCE_LOCK"
+        const val ACTION_TOGGLE_LOCK = "ACTION_TOGGLE_LOCK"
         const val ACTION_EXIT_APP = "ACTION_EXIT_APP"
         const val ACTION_NOTIFICATION_DISMISSED = "ACTION_NOTIFICATION_DISMISSED"
     }
@@ -39,38 +42,37 @@ class ChildLockService : Service() {
     override fun onCreate() {
         super.onCreate()
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
+
+        // 1. Build the overlay views ONCE when the service starts
+        createOverlayView()
+
+        // 2. Start the foreground notification
         startForegroundServiceWithNotification()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
-            ACTION_START_LOCK -> showOverlay()
-            ACTION_STOP_LOCK -> hideOverlay()
-            ACTION_EXIT_APP, ACTION_NOTIFICATION_DISMISSED -> {
-                hideOverlay() // Drop the shield if it's up
-                stopSelf()    // Kill the service and remove the notification completely
-            }
+            ACTION_FORCE_LOCK -> setBlockingState(true)
+            ACTION_TOGGLE_LOCK -> setBlockingState(!isTouchBlocked)
+            ACTION_EXIT_APP, ACTION_NOTIFICATION_DISMISSED -> cleanupAndExit()
         }
         return START_STICKY
     }
 
-    private fun showOverlay() {
-        if (isOverlayActive) return
+    private fun createOverlayView() {
+        overlayView = FrameLayout(this)
 
-        val frameLayout = FrameLayout(this)
-        frameLayout.setBackgroundColor(Color.argb(10, 0, 0, 0))
-
-        frameLayout.setOnTouchListener { _, event ->
-            if (event.action == MotionEvent.ACTION_DOWN) {
-                // Consume touch
+        // Intercept touches (only matters when window is full screen)
+        overlayView.setOnTouchListener { _, event ->
+            if (isTouchBlocked && event.action == MotionEvent.ACTION_DOWN) {
+                // Touch absorbed!
             }
-            true
+            isTouchBlocked
         }
 
-        // --- THE VISIBLE PADLOCK ICON IS BACK ---
-        val unlockButton = ImageView(this)
-        unlockButton.setImageResource(R.drawable.ic_secure) // System padlock icon
-        unlockButton.setBackgroundColor(Color.argb(150, 0, 0, 0)) // Semi-transparent black background
+        // Setup the physical Padlock Button
+        unlockButton = ImageView(this)
+        unlockButton.setImageResource(R.drawable.ic_secure)
 
         val density = resources.displayMetrics.density
         val padding = (12 * density).toInt()
@@ -85,24 +87,25 @@ class ChildLockService : Service() {
             rightMargin = margin
         }
 
+        // LONG PRESS toggles the lock state!
         unlockButton.setOnLongClickListener {
-            hideOverlay()
+            setBlockingState(!isTouchBlocked)
             true
         }
 
-        frameLayout.addView(unlockButton, buttonParams)
-        overlayView = frameLayout
+        overlayView.addView(unlockButton, buttonParams)
 
-        // WindowManager settings
-        val layoutParams = WindowManager.LayoutParams(
-            WindowManager.LayoutParams.MATCH_PARENT,
-            WindowManager.LayoutParams.MATCH_PARENT,
+        // Setup WindowManager Params
+        layoutParams = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                     WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
                     WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
             PixelFormat.TRANSLUCENT
         ).apply {
+            gravity = Gravity.TOP or Gravity.END // Keeps window anchored to top right when shrinking
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                 layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
             }
@@ -114,22 +117,59 @@ class ChildLockService : Service() {
         }
 
         windowManager.addView(overlayView, layoutParams)
-        isOverlayActive = true
-
-        updateNotification()
-        Toast.makeText(this, "Shield ON", Toast.LENGTH_SHORT).show()
     }
 
-    private fun hideOverlay() {
-        if (!isOverlayActive) return
+        private fun setBlockingState(blocked: Boolean) {
+        isTouchBlocked = blocked
 
+        if (isTouchBlocked) {
+            // 1. Expand to full screen
+            layoutParams.width = WindowManager.LayoutParams.MATCH_PARENT
+            layoutParams.height = WindowManager.LayoutParams.MATCH_PARENT
+            overlayView.setBackgroundColor(Color.argb(10, 0, 0, 0)) // Slight tint
+            unlockButton.setBackgroundColor(Color.argb(200, 255, 0, 0)) // RED Background
+
+            // Apply the size changes to the screen FIRST
+            windowManager.updateViewLayout(overlayView, layoutParams)
+
+            // 2. ADD THIS BACK: Re-apply the gesture exclusion to the new full-screen size
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                overlayView.post {
+                    overlayView.systemGestureExclusionRects = listOf(
+                        android.graphics.Rect(0, 0, overlayView.width, overlayView.height)
+                    )
+                }
+            }
+
+            Toast.makeText(this, "Shield ON", Toast.LENGTH_SHORT).show()
+
+        } else {
+            // 1. Shrink window to just the button so touches pass through to the app
+            layoutParams.width = WindowManager.LayoutParams.WRAP_CONTENT
+            layoutParams.height = WindowManager.LayoutParams.WRAP_CONTENT
+            overlayView.setBackgroundColor(Color.TRANSPARENT)
+            unlockButton.setBackgroundColor(Color.argb(200, 0, 200, 0)) // GREEN Background
+
+            // Apply the size changes to the screen FIRST
+            windowManager.updateViewLayout(overlayView, layoutParams)
+
+            // 2. ADD THIS BACK: Remove the gesture exclusion so you can navigate normally
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                overlayView.systemGestureExclusionRects = emptyList()
+            }
+
+            Toast.makeText(this, "Shield OFF", Toast.LENGTH_SHORT).show()
+        }
+
+        // Sync the notification
+        updateNotification()
+    }
+
+    private fun cleanupAndExit() {
         if (::overlayView.isInitialized) {
             windowManager.removeView(overlayView)
         }
-        isOverlayActive = false
-
-        updateNotification()
-        Toast.makeText(this, "Shield OFF", Toast.LENGTH_SHORT).show()
+        stopSelf()
     }
 
     private fun startForegroundServiceWithNotification() {
@@ -152,50 +192,34 @@ class ChildLockService : Service() {
             getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
         }
 
-        // 1. The Toggle Intent (Starts or Stops the Lock) - Request Code 0
-        val toggleIntent = Intent(this, ChildLockService::class.java).apply {
-            action = if (isOverlayActive) ACTION_STOP_LOCK else ACTION_START_LOCK
-        }
-        val pendingToggleIntent = PendingIntent.getService(
-            this, 0, toggleIntent,
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
-        )
+        // 1. Toggle Intent
+        val toggleIntent = Intent(this, ChildLockService::class.java).apply { action = ACTION_TOGGLE_LOCK }
+        val pendingToggleIntent = PendingIntent.getService(this, 0, toggleIntent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
 
-        // 2. The Exit Intent (Kills the App entirely) - Request Code 1
-        val exitIntent = Intent(this, ChildLockService::class.java).apply {
-            action = ACTION_EXIT_APP
-        }
-        val pendingExitIntent = PendingIntent.getService(
-            this, 1, exitIntent,
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
-        )
+        // 2. Exit Intent
+        val exitIntent = Intent(this, ChildLockService::class.java).apply { action = ACTION_EXIT_APP }
+        val pendingExitIntent = PendingIntent.getService(this, 1, exitIntent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
 
-        val dismissIntent = Intent(this, ChildLockService::class.java).apply {
-            action = ACTION_NOTIFICATION_DISMISSED
-        }
-        val pendingDismissIntent = PendingIntent.getService(
-            this, 2, dismissIntent,
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
-        )
+        // 3. Dismiss Intent (When swiped away)
+        val dismissIntent = Intent(this, ChildLockService::class.java).apply { action = ACTION_NOTIFICATION_DISMISSED }
+        val pendingDismissIntent = PendingIntent.getService(this, 2, dismissIntent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
 
-        // 3. Build the persistent notification
         val builder = NotificationCompat.Builder(this, channelId)
             .setSmallIcon(R.drawable.ic_secure)
-            .setOngoing(true) // This makes it persistent (un-swipeable)
-            .setAutoCancel(false) // Ensures tapping it doesn't accidentally dismiss it
+            .setOngoing(true)
+            .setAutoCancel(false)
             .setDeleteIntent(pendingDismissIntent)
 
-        if (isOverlayActive) {
+        if (isTouchBlocked) {
             builder.setContentTitle("🔒 Screen is Locked")
                 .setContentText("Touches are blocked.")
                 .addAction(R.drawable.ic_media_pause, "UNLOCK", pendingToggleIntent)
         } else {
             builder.setContentTitle("🔓 Lock is Ready")
-                .setContentText("Tap button to block touches.")
+                .setContentText("Touches passing through.")
                 .addAction(R.drawable.ic_media_play, "LOCK", pendingToggleIntent)
         }
 
-        // Add the EXIT button to both states
         builder.addAction(R.drawable.ic_menu_close_clear_cancel, "EXIT APP", pendingExitIntent)
 
         return builder.build()
@@ -203,6 +227,6 @@ class ChildLockService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
-        hideOverlay() // Always clean up the shield if the service is destroyed
+        cleanupAndExit()
     }
 }

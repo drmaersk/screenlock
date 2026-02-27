@@ -83,7 +83,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun startChildLockService() {
-        val serviceIntent = Intent(this, ChildLockService::class.java)
+        val serviceIntent = Intent(this, ChildLockService::class.java).apply {
+            action = ChildLockService.ACTION_FORCE_LOCK
+        }
 
         // Android 8.0 (API 26)+ requires using startForegroundService
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
