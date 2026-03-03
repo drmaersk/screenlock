@@ -7,6 +7,7 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
+import android.content.pm.ActivityInfo
 import android.content.pm.ServiceInfo
 import android.graphics.Color
 import android.graphics.PixelFormat
@@ -48,16 +49,155 @@ class ChildLockService : Service() {
 
         // 2. Start the foreground notification
         startForegroundServiceWithNotification()
+
+        // Start in Green Mode (Unlocked)
+        setBlockingState(false)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // 1. READ PREFERENCE: Always load the latest setting from storage
+        val sharedPrefs = getSharedPreferences("ChildLockPrefs", Context.MODE_PRIVATE)
+        allowOnScreenUnlock = sharedPrefs.getBoolean("ALLOW_UNLOCK", true)
+
         when (intent?.action) {
             ACTION_FORCE_LOCK -> setBlockingState(true)
             ACTION_TOGGLE_LOCK -> setBlockingState(!isTouchBlocked)
             ACTION_EXIT_APP, ACTION_NOTIFICATION_DISMISSED -> cleanupAndExit()
+
+            // If the user just opened the app and hit "Start" again to update settings,
+            // we should refresh the UI if the lock is currently active.
+            else -> {
+                if (isTouchBlocked) {
+                    setBlockingState(true) // Re-apply the lock with new settings
+            }
         }
         return START_STICKY
     }
+
+
+
+        private fun createOverlayView() {
+            overlayView = FrameLayout(this)
+
+            overlayView.setOnTouchListener { _, event ->
+                if (isTouchBlocked && event.action == MotionEvent.ACTION_DOWN) {
+                    // Block touches
+                }
+                isTouchBlocked
+            }
+
+
+
+            val density = resources.displayMetrics.density
+            val padding = (12 * density).toInt()
+
+
+            val size = (40 * density).toInt()
+            val margin = (32 * density).toInt()
+
+            // Setup the Padlock Button
+            unlockButton = ImageView(this)
+            unlockButton.setImageResource(android.R.drawable.ic_secure)
+
+
+            unlockButton.setPadding(padding, padding, padding, padding)
+
+
+
+            val buttonParams = FrameLayout.LayoutParams(size, size).apply {
+                gravity = Gravity.TOP or Gravity.END
+                topMargin = margin + 60
+                rightMargin = margin
+            }
+
+            unlockButton.setOnLongClickListener {
+                setBlockingState(!isTouchBlocked)
+                true
+            }
+            overlayView.addView(unlockButton, buttonParams)
+
+            // Setup Window Params
+            layoutParams = WindowManager.LayoutParams(
+                WindowManager.LayoutParams.WRAP_CONTENT,
+                WindowManager.LayoutParams.WRAP_CONTENT,
+                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                        WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                        WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                PixelFormat.TRANSLUCENT
+            ).apply {
+                gravity = Gravity.TOP or Gravity.END
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+                }
+            }
+
+            windowManager.addView(overlayView, layoutParams)
+        }
+
+        private fun setBlockingState(blocked: Boolean) {
+            isTouchBlocked = blocked
+
+            if (isTouchBlocked) {
+                // === LOCKED STATE (RED) ===
+                layoutParams.width = WindowManager.LayoutParams.MATCH_PARENT
+                layoutParams.height = WindowManager.LayoutParams.MATCH_PARENT
+                overlayView.setBackgroundColor(Color.argb(10, 0, 0, 0))
+
+                // THE LOGIC: Only show Red Button if allowed!
+                if (allowOnScreenUnlock) {
+                    unlockButton.visibility = View.VISIBLE
+                    unlockButton.setBackgroundColor(Color.argb(200, 255, 0, 0)) // RED
+                } else {
+                    unlockButton.visibility = View.GONE // HIDDEN TRAP MODE
+                }
+
+                // Lock Rotation
+                val currentRotation = resources.configuration.orientation
+                if (currentRotation == android.content.res.Configuration.ORIENTATION_LANDSCAPE) {
+                    layoutParams.screenOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+                } else {
+                    layoutParams.screenOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+                }
+
+                windowManager.updateViewLayout(overlayView, layoutParams)
+
+                // Block Gestures
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    overlayView.post {
+                        overlayView.systemGestureExclusionRects = listOf(
+                            android.graphics.Rect(0, 0, overlayView.width, overlayView.height)
+                        )
+                    }
+                }
+                Toast.makeText(this, "Shield ON", Toast.LENGTH_SHORT).show()
+
+            } else {
+                // === UNLOCKED STATE (GREEN) ===
+                layoutParams.width = WindowManager.LayoutParams.WRAP_CONTENT
+                layoutParams.height = WindowManager.LayoutParams.WRAP_CONTENT
+                overlayView.setBackgroundColor(Color.TRANSPARENT)
+
+                // Always show Green button (so you can click it to lock!)
+                unlockButton.visibility = View.VISIBLE
+                unlockButton.setBackgroundColor(Color.argb(200, 0, 200, 0)) // GREEN
+
+                // Unlock Rotation
+                layoutParams.screenOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+
+                windowManager.updateViewLayout(overlayView, layoutParams)
+
+                // Unblock Gestures
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    overlayView.systemGestureExclusionRects = emptyList()
+                }
+                Toast.makeText(this, "Shield OFF", Toast.LENGTH_SHORT).show()
+            }
+
+            updateNotification()
+        }
+
+
 
     private fun createOverlayView() {
         overlayView = FrameLayout(this)
@@ -129,10 +269,18 @@ class ChildLockService : Service() {
             overlayView.setBackgroundColor(Color.argb(10, 0, 0, 0)) // Slight tint
             unlockButton.setBackgroundColor(Color.argb(200, 255, 0, 0)) // RED Background
 
+            // 2. LOCK ROTATION: Freeze screen in current orientation
+            val currentRotation = resources.configuration.orientation
+            if (currentRotation == android.content.res.Configuration.ORIENTATION_LANDSCAPE) {
+                layoutParams.screenOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+            } else {
+                layoutParams.screenOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+            }
+
             // Apply the size changes to the screen FIRST
             windowManager.updateViewLayout(overlayView, layoutParams)
 
-            // 2. ADD THIS BACK: Re-apply the gesture exclusion to the new full-screen size
+            // 3. ADD THIS BACK: Re-apply the gesture exclusion to the new full-screen size
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 overlayView.post {
                     overlayView.systemGestureExclusionRects = listOf(
@@ -149,6 +297,9 @@ class ChildLockService : Service() {
             layoutParams.height = WindowManager.LayoutParams.WRAP_CONTENT
             overlayView.setBackgroundColor(Color.TRANSPARENT)
             unlockButton.setBackgroundColor(Color.argb(200, 0, 200, 0)) // GREEN Background
+
+            // 2. UNLOCK ROTATION: Let the sensor decide
+            layoutParams.screenOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
 
             // Apply the size changes to the screen FIRST
             windowManager.updateViewLayout(overlayView, layoutParams)

@@ -29,11 +29,17 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.layout)
-
+        val cbAllowUnlock = findViewById<CheckBox>(R.id.cbAllowUnlock)
         val btnStartLock = findViewById<Button>(R.id.btnStartLock)
+
+        // 1. LOAD PREFERENCE: Retrieve the saved state (Default to TRUE)
+        val sharedPrefs = getSharedPreferences("ChildLockPrefs", Context.MODE_PRIVATE)
+        val savedState = sharedPrefs.getBoolean("ALLOW_UNLOCK", true)
+        cbAllowUnlock.isChecked = savedState
 
         btnStartLock.setOnClickListener {
             if (Settings.canDrawOverlays(this)) {
+                sharedPrefs.edit().putBoolean("ALLOW_UNLOCK", cbAllowUnlock.isChecked).apply()
                 // We already have permission, start the service
                 startChildLockService();
             } else {
