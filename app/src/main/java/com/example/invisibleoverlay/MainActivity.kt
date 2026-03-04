@@ -1,4 +1,5 @@
 package com.example.invisibleoverlay
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
@@ -8,6 +9,7 @@ import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
 import android.widget.Button
+import android.widget.CheckBox
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
@@ -31,15 +33,28 @@ class MainActivity : AppCompatActivity() {
         setContentView(R.layout.layout)
         val cbAllowUnlock = findViewById<CheckBox>(R.id.cbAllowUnlock)
         val btnStartLock = findViewById<Button>(R.id.btnStartLock)
+        val cbLockRotation = findViewById<CheckBox>(R.id.cbLockRotation)
 
-        // 1. LOAD PREFERENCE: Retrieve the saved state (Default to TRUE)
+        private val requestNotificationPermissionLauncher = registerForActivityResult(
+            ActivityResultContracts.RequestPermission()
+        ) { isGranted: Boolean ->
+            if (isGranted) {
+                // Permission granted! Now try to start the lock again
+                checkOverlayAndStart()
+            } else {
+                Toast.makeText(this, "Notifications are needed to control the lock!", Toast.LENGTH_LONG).show()
+            }
+        }
+
         val sharedPrefs = getSharedPreferences("ChildLockPrefs", Context.MODE_PRIVATE)
-        val savedState = sharedPrefs.getBoolean("ALLOW_UNLOCK", true)
-        cbAllowUnlock.isChecked = savedState
+        cbAllowUnlock.isChecked = sharedPrefs.getBoolean("ALLOW_UNLOCK", true)
+        cbLockRotation.isChecked = sharedPrefs.getBoolean("LOCK_ROTATION", true)
 
         btnStartLock.setOnClickListener {
             if (Settings.canDrawOverlays(this)) {
-                sharedPrefs.edit().putBoolean("ALLOW_UNLOCK", cbAllowUnlock.isChecked).apply()
+                sharedPrefs.edit()
+                    .putBoolean("ALLOW_UNLOCK", cbAllowUnlock.isChecked)
+                    .putBoolean("LOCK_ROTATION", cbLockRotation.isChecked).apply()
                 // We already have permission, start the service
                 startChildLockService();
             } else {
@@ -49,6 +64,16 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        // Check the flag from the Service
+        val btnStartLock = findViewById<Button>(R.id.btnStartLock)
+        if (ChildLockService.isRunning) {
+            btnStartLock.text = "Reload"
+        } else {
+            btnStartLock.text = "Start Child Lock"
+        }
+    }
     private fun requestOverlayPermission() {
         // Create an intent to open the "Display over other apps" settings for THIS specific app
         val intent = Intent(
@@ -89,9 +114,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun startChildLockService() {
-        val serviceIntent = Intent(this, ChildLockService::class.java).apply {
-            action = ChildLockService.ACTION_FORCE_LOCK
-        }
+        val serviceIntent = Intent(this, ChildLockService::class.java)
 
         // Android 8.0 (API 26)+ requires using startForegroundService
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {

@@ -6,6 +6,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.Context
 import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.content.pm.ServiceInfo
@@ -30,20 +31,31 @@ class ChildLockService : Service() {
     private lateinit var layoutParams: WindowManager.LayoutParams
 
     private var isTouchBlocked = false
+    private var allowOnScreenUnlock = true
+    private var lockRotation = true
+
+
 
     companion object {
         const val ACTION_FORCE_LOCK = "ACTION_FORCE_LOCK"
         const val ACTION_TOGGLE_LOCK = "ACTION_TOGGLE_LOCK"
         const val ACTION_EXIT_APP = "ACTION_EXIT_APP"
         const val ACTION_NOTIFICATION_DISMISSED = "ACTION_NOTIFICATION_DISMISSED"
+        var isRunning = false
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+
     override fun onCreate() {
         super.onCreate()
+        isRunning = true
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
 
+        // 1. READ PREFERENCE: Always load the latest setting from storage
+        val sharedPrefs = getSharedPreferences("ChildLockPrefs", Context.MODE_PRIVATE)
+        allowOnScreenUnlock = sharedPrefs.getBoolean("ALLOW_UNLOCK", true)
+        lockRotation = sharedPrefs.getBoolean("LOCK_ROTATION", true)
         // 1. Build the overlay views ONCE when the service starts
         createOverlayView()
 
@@ -58,6 +70,7 @@ class ChildLockService : Service() {
         // 1. READ PREFERENCE: Always load the latest setting from storage
         val sharedPrefs = getSharedPreferences("ChildLockPrefs", Context.MODE_PRIVATE)
         allowOnScreenUnlock = sharedPrefs.getBoolean("ALLOW_UNLOCK", true)
+        lockRotation = sharedPrefs.getBoolean("LOCK_ROTATION", true)
 
         when (intent?.action) {
             ACTION_FORCE_LOCK -> setBlockingState(true)
@@ -69,6 +82,7 @@ class ChildLockService : Service() {
             else -> {
                 if (isTouchBlocked) {
                     setBlockingState(true) // Re-apply the lock with new settings
+                }
             }
         }
         return START_STICKY
@@ -86,23 +100,15 @@ class ChildLockService : Service() {
                 isTouchBlocked
             }
 
-
-
-            val density = resources.displayMetrics.density
-            val padding = (12 * density).toInt()
-
-
-            val size = (40 * density).toInt()
-            val margin = (32 * density).toInt()
-
             // Setup the Padlock Button
             unlockButton = ImageView(this)
             unlockButton.setImageResource(android.R.drawable.ic_secure)
-
+            val density = resources.displayMetrics.density
+            val padding = (12 * density).toInt()
+            val size = (40 * density).toInt()
+            val margin = (32 * density).toInt()
 
             unlockButton.setPadding(padding, padding, padding, padding)
-
-
 
             val buttonParams = FrameLayout.LayoutParams(size, size).apply {
                 gravity = Gravity.TOP or Gravity.END
@@ -153,11 +159,13 @@ class ChildLockService : Service() {
                 }
 
                 // Lock Rotation
-                val currentRotation = resources.configuration.orientation
-                if (currentRotation == android.content.res.Configuration.ORIENTATION_LANDSCAPE) {
-                    layoutParams.screenOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
-                } else {
-                    layoutParams.screenOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+                if (lockRotation) {
+                    val currentRotation = resources.configuration.orientation
+                    if (currentRotation == android.content.res.Configuration.ORIENTATION_LANDSCAPE) {
+                        layoutParams.screenOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+                    } else {
+                        layoutParams.screenOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+                    }
                 }
 
                 windowManager.updateViewLayout(overlayView, layoutParams)
@@ -197,124 +205,6 @@ class ChildLockService : Service() {
             updateNotification()
         }
 
-
-
-    private fun createOverlayView() {
-        overlayView = FrameLayout(this)
-
-        // Intercept touches (only matters when window is full screen)
-        overlayView.setOnTouchListener { _, event ->
-            if (isTouchBlocked && event.action == MotionEvent.ACTION_DOWN) {
-                // Touch absorbed!
-            }
-            isTouchBlocked
-        }
-
-        // Setup the physical Padlock Button
-        unlockButton = ImageView(this)
-        unlockButton.setImageResource(R.drawable.ic_secure)
-
-        val density = resources.displayMetrics.density
-        val padding = (12 * density).toInt()
-        unlockButton.setPadding(padding, padding, padding, padding)
-
-        val size = (40 * density).toInt()
-        val margin = (32 * density).toInt()
-
-        val buttonParams = FrameLayout.LayoutParams(size, size).apply {
-            gravity = Gravity.TOP or Gravity.END
-            topMargin = margin + 60
-            rightMargin = margin
-        }
-
-        // LONG PRESS toggles the lock state!
-        unlockButton.setOnLongClickListener {
-            setBlockingState(!isTouchBlocked)
-            true
-        }
-
-        overlayView.addView(unlockButton, buttonParams)
-
-        // Setup WindowManager Params
-        layoutParams = WindowManager.LayoutParams(
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
-                    WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
-            PixelFormat.TRANSLUCENT
-        ).apply {
-            gravity = Gravity.TOP or Gravity.END // Keeps window anchored to top right when shrinking
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
-            }
-            systemUiVisibility = (View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
-                    or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
-                    or View.SYSTEM_UI_FLAG_FULLSCREEN
-                    or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
-                    or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN)
-        }
-
-        windowManager.addView(overlayView, layoutParams)
-    }
-
-        private fun setBlockingState(blocked: Boolean) {
-        isTouchBlocked = blocked
-
-        if (isTouchBlocked) {
-            // 1. Expand to full screen
-            layoutParams.width = WindowManager.LayoutParams.MATCH_PARENT
-            layoutParams.height = WindowManager.LayoutParams.MATCH_PARENT
-            overlayView.setBackgroundColor(Color.argb(10, 0, 0, 0)) // Slight tint
-            unlockButton.setBackgroundColor(Color.argb(200, 255, 0, 0)) // RED Background
-
-            // 2. LOCK ROTATION: Freeze screen in current orientation
-            val currentRotation = resources.configuration.orientation
-            if (currentRotation == android.content.res.Configuration.ORIENTATION_LANDSCAPE) {
-                layoutParams.screenOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
-            } else {
-                layoutParams.screenOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
-            }
-
-            // Apply the size changes to the screen FIRST
-            windowManager.updateViewLayout(overlayView, layoutParams)
-
-            // 3. ADD THIS BACK: Re-apply the gesture exclusion to the new full-screen size
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                overlayView.post {
-                    overlayView.systemGestureExclusionRects = listOf(
-                        android.graphics.Rect(0, 0, overlayView.width, overlayView.height)
-                    )
-                }
-            }
-
-            Toast.makeText(this, "Shield ON", Toast.LENGTH_SHORT).show()
-
-        } else {
-            // 1. Shrink window to just the button so touches pass through to the app
-            layoutParams.width = WindowManager.LayoutParams.WRAP_CONTENT
-            layoutParams.height = WindowManager.LayoutParams.WRAP_CONTENT
-            overlayView.setBackgroundColor(Color.TRANSPARENT)
-            unlockButton.setBackgroundColor(Color.argb(200, 0, 200, 0)) // GREEN Background
-
-            // 2. UNLOCK ROTATION: Let the sensor decide
-            layoutParams.screenOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
-
-            // Apply the size changes to the screen FIRST
-            windowManager.updateViewLayout(overlayView, layoutParams)
-
-            // 2. ADD THIS BACK: Remove the gesture exclusion so you can navigate normally
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                overlayView.systemGestureExclusionRects = emptyList()
-            }
-
-            Toast.makeText(this, "Shield OFF", Toast.LENGTH_SHORT).show()
-        }
-
-        // Sync the notification
-        updateNotification()
-    }
 
     private fun cleanupAndExit() {
         if (::overlayView.isInitialized) {
@@ -378,6 +268,7 @@ class ChildLockService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
+        isRunning = false
         cleanupAndExit()
     }
 }
