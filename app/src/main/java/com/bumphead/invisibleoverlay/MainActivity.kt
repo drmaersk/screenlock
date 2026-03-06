@@ -1,4 +1,4 @@
-package com.example.invisibleoverlay
+package com.bumphead.invisibleoverlay
 import android.Manifest
 import android.content.Context
 import android.content.Intent

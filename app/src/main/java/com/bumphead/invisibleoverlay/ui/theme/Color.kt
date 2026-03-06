@@ -1,4 +1,4 @@
-package com.example.invisibleoverlay.ui.theme
+package com.bumphead.invisibleoverlay.ui.theme
 
 import androidx.compose.ui.graphics.Color
 

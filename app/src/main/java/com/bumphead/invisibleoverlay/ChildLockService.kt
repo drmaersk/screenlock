@@ -1,4 +1,4 @@
-package com.example.invisibleoverlay
+package com.bumphead.invisibleoverlay
 
 import android.R
 import android.app.Notification

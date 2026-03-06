@@ -4,7 +4,7 @@ plugins {
 }
 
 android {
-    namespace = "com.example.invisibleoverlay"
+    namespace = "com.bumphead.invisibleoverlay"
     compileSdk {
         version = release(36) {
             minorApiLevel = 1
