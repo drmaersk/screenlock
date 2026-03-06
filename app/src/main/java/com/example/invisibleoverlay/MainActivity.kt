@@ -1,6 +1,8 @@
 package com.example.invisibleoverlay
+import android.Manifest
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -13,9 +15,24 @@ import android.widget.CheckBox
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 
 class MainActivity : AppCompatActivity() {
+    private lateinit var cbAllowUnlock: CheckBox
+    private lateinit var cbLockRotation: CheckBox
+    private lateinit var btnStartLock: Button
+    private val requestNotificationPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { isGranted: Boolean ->
+        if (isGranted) {
+            // Permission granted! Now try to start the lock again
+            checkOverlayAndStart()
+        } else {
+            Toast.makeText(this, "Notifications are needed to control the lock!", Toast.LENGTH_LONG).show()
+            checkOverlayAndStart()
+        }
 
+    }
     // Modern way to handle Activity Results (replaces deprecated startActivityForResult)
     private val overlayPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -31,49 +48,63 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.layout)
-        val cbAllowUnlock = findViewById<CheckBox>(R.id.cbAllowUnlock)
-        val btnStartLock = findViewById<Button>(R.id.btnStartLock)
-        val cbLockRotation = findViewById<CheckBox>(R.id.cbLockRotation)
+        cbAllowUnlock = findViewById<CheckBox>(R.id.cbAllowUnlock)
+        btnStartLock = findViewById<Button>(R.id.btnStartLock)
+        cbLockRotation = findViewById<CheckBox>(R.id.cbLockRotation)
 
-        private val requestNotificationPermissionLauncher = registerForActivityResult(
-            ActivityResultContracts.RequestPermission()
-        ) { isGranted: Boolean ->
-            if (isGranted) {
-                // Permission granted! Now try to start the lock again
-                checkOverlayAndStart()
-            } else {
-                Toast.makeText(this, "Notifications are needed to control the lock!", Toast.LENGTH_LONG).show()
-            }
-        }
-
+        // 1. load preferences
         val sharedPrefs = getSharedPreferences("ChildLockPrefs", Context.MODE_PRIVATE)
         cbAllowUnlock.isChecked = sharedPrefs.getBoolean("ALLOW_UNLOCK", true)
         cbLockRotation.isChecked = sharedPrefs.getBoolean("LOCK_ROTATION", true)
 
         btnStartLock.setOnClickListener {
-            if (Settings.canDrawOverlays(this)) {
+              // 2. SAVE PREFERENCES IMMEDIATELY
                 sharedPrefs.edit()
                     .putBoolean("ALLOW_UNLOCK", cbAllowUnlock.isChecked)
                     .putBoolean("LOCK_ROTATION", cbLockRotation.isChecked).apply()
-                // We already have permission, start the service
-                startChildLockService();
-            } else {
-                // We don't have permission, request it
-                requestOverlayPermission()
-            }
+                checkNotificationAndStart()
         }
     }
 
     override fun onResume() {
         super.onResume()
         // Check the flag from the Service
-        val btnStartLock = findViewById<Button>(R.id.btnStartLock)
         if (ChildLockService.isRunning) {
             btnStartLock.text = "Reload"
         } else {
             btnStartLock.text = "Start Child Lock"
         }
     }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        timer?.cancel()
+    }
+
+    private fun checkNotificationAndStart() {
+        // CHECK 1: Notification Permission (Only needed for Android 13 / API 33+)
+        if (Build.VERSION.SDK_INT >= 33) {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                // We don't have permission, so ask for it
+                requestNotificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                return // Stop here until the user says Yes
+            }
+        }
+
+        // CHECK 2: Overlay Permission
+        checkOverlayAndStart()
+    }
+
+
+    private fun checkOverlayAndStart() {
+        if (Settings.canDrawOverlays(this)) {
+            startChildLockService()
+        } else {
+            requestOverlayPermission()
+        }
+    }
+
+
     private fun requestOverlayPermission() {
         // Create an intent to open the "Display over other apps" settings for THIS specific app
         val intent = Intent(
@@ -82,6 +113,27 @@ class MainActivity : AppCompatActivity() {
         )
         Toast.makeText(this, "Please allow 'Display over other apps'", Toast.LENGTH_SHORT).show()
         overlayPermissionLauncher.launch(intent)
+    }
+
+
+
+
+
+    private fun startChildLockService() {
+        val serviceIntent = Intent(this, ChildLockService::class.java)
+
+        // Android 8.0 (API 26)+ requires using startForegroundService
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForegroundService(serviceIntent)
+        } else {
+            startService(serviceIntent)
+        }
+
+        btnStartLock.text = "Reload"
+        Toast.makeText(this, "Child Lock Started!! Long press the lock icon to exit.", Toast.LENGTH_LONG).show()
+
+        // Optional: Close the Activity so you are dropped back to your home screen
+        finish()
     }
 
     private var timer: CountDownTimer? = null
@@ -106,26 +158,5 @@ class MainActivity : AppCompatActivity() {
                 // finish()
             }
         }.start()
-    }
-
-    override fun onDestroy() {
-        super.onDestroy()
-        timer?.cancel()
-    }
-
-    private fun startChildLockService() {
-        val serviceIntent = Intent(this, ChildLockService::class.java)
-
-        // Android 8.0 (API 26)+ requires using startForegroundService
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            startForegroundService(serviceIntent)
-        } else {
-            startService(serviceIntent)
-        }
-
-        Toast.makeText(this, "Child Lock Started!! Long press the lock icon to exit.", Toast.LENGTH_LONG).show()
-
-        // Optional: Close the Activity so you are dropped back to your home screen
-        // finish()
     }
 }
