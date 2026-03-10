@@ -16,6 +16,7 @@ import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import androidx.core.content.edit
 
 class MainActivity : AppCompatActivity() {
     private lateinit var cbAllowUnlock: CheckBox
@@ -39,7 +40,7 @@ class MainActivity : AppCompatActivity() {
     ) {
         // Check if the user granted the permission after returning from settings
         if (Settings.canDrawOverlays(this)) {
-            startChildLockService();
+            startChildLockService()
         } else {
             Toast.makeText(this, "Permission is required to enable Child Lock", Toast.LENGTH_LONG).show()
         }
@@ -59,9 +60,10 @@ class MainActivity : AppCompatActivity() {
 
         btnStartLock.setOnClickListener {
               // 2. SAVE PREFERENCES IMMEDIATELY
-                sharedPrefs.edit()
-                    .putBoolean("ALLOW_UNLOCK", cbAllowUnlock.isChecked)
-                    .putBoolean("LOCK_ROTATION", cbLockRotation.isChecked).apply()
+                sharedPrefs.edit {
+                    putBoolean("ALLOW_UNLOCK", cbAllowUnlock.isChecked)
+                    putBoolean("LOCK_ROTATION", cbLockRotation.isChecked)
+                }
                 checkNotificationAndStart()
         }
     }
