@@ -1,6 +1,5 @@
 package com.bumphead.invisibleoverlay
 
-import android.R
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -12,6 +11,7 @@ import android.content.pm.ActivityInfo
 import android.content.pm.ServiceInfo
 import android.graphics.Color
 import android.graphics.PixelFormat
+import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.IBinder
 import android.view.Gravity
@@ -102,13 +102,13 @@ class ChildLockService : Service() {
 
             // Setup the Padlock Button
             unlockButton = ImageView(this)
-            unlockButton.setImageResource(android.R.drawable.ic_secure)
             val density = resources.displayMetrics.density
-            val padding = (12 * density).toInt()
-            val size = (40 * density).toInt()
-            val margin = (32 * density).toInt()
+            val padding = (14 * density).toInt()
+            val size = (56 * density).toInt()
+            val margin = (24 * density).toInt()
 
             unlockButton.setPadding(padding, padding, padding, padding)
+            unlockButton.elevation = 8 * density
 
             val buttonParams = FrameLayout.LayoutParams(size, size).apply {
                 gravity = Gravity.TOP or Gravity.END
@@ -153,7 +153,11 @@ class ChildLockService : Service() {
                 // THE LOGIC: Only show Red Button if allowed!
                 if (allowOnScreenUnlock) {
                     unlockButton.visibility = View.VISIBLE
-                    unlockButton.setBackgroundColor(Color.argb(200, 255, 0, 0)) // RED
+                    unlockButton.setImageResource(com.bumphead.invisibleoverlay.R.drawable.ic_lock)
+                    unlockButton.background = GradientDrawable().apply {
+                        shape = GradientDrawable.OVAL
+                        setColor(Color.argb(230, 198, 40, 40)) // Material Red 800
+                    }
                 } else {
                     unlockButton.visibility = View.GONE // HIDDEN TRAP MODE
                 }
@@ -188,7 +192,11 @@ class ChildLockService : Service() {
 
                 // Always show Green button (so you can click it to lock!)
                 unlockButton.visibility = View.VISIBLE
-                unlockButton.setBackgroundColor(Color.argb(200, 0, 200, 0)) // GREEN
+                unlockButton.setImageResource(com.bumphead.invisibleoverlay.R.drawable.ic_lock_open)
+                unlockButton.background = GradientDrawable().apply {
+                    shape = GradientDrawable.OVAL
+                    setColor(Color.argb(230, 46, 125, 50)) // Material Green 800
+                }
 
                 // Unlock Rotation
                 layoutParams.screenOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
@@ -246,7 +254,7 @@ class ChildLockService : Service() {
         val pendingDismissIntent = PendingIntent.getService(this, 2, dismissIntent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
 
         val builder = NotificationCompat.Builder(this, channelId)
-            .setSmallIcon(R.drawable.ic_secure)
+            .setSmallIcon(com.bumphead.invisibleoverlay.R.drawable.ic_lock)
             .setOngoing(true)
             .setAutoCancel(false)
             .setDeleteIntent(pendingDismissIntent)
@@ -254,14 +262,14 @@ class ChildLockService : Service() {
         if (isTouchBlocked) {
             builder.setContentTitle("🔒 Screen is Locked")
                 .setContentText("Touches are blocked.")
-                .addAction(R.drawable.ic_media_pause, "UNLOCK", pendingToggleIntent)
+                .addAction(com.bumphead.invisibleoverlay.R.drawable.ic_lock_open, "UNLOCK", pendingToggleIntent)
         } else {
             builder.setContentTitle("🔓 Lock is Ready")
                 .setContentText("Touches passing through.")
-                .addAction(R.drawable.ic_media_play, "LOCK", pendingToggleIntent)
+                .addAction(com.bumphead.invisibleoverlay.R.drawable.ic_lock, "LOCK", pendingToggleIntent)
         }
 
-        builder.addAction(R.drawable.ic_menu_close_clear_cancel, "EXIT APP", pendingExitIntent)
+        builder.addAction(android.R.drawable.ic_menu_close_clear_cancel, "EXIT APP", pendingExitIntent)
 
         return builder.build()
     }

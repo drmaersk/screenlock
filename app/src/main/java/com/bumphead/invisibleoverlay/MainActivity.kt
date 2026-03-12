@@ -11,7 +11,7 @@ import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
 import android.widget.Button
-import android.widget.CheckBox
+import android.widget.CompoundButton
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
@@ -19,8 +19,8 @@ import androidx.core.content.ContextCompat
 import androidx.core.content.edit
 
 class MainActivity : AppCompatActivity() {
-    private lateinit var cbAllowUnlock: CheckBox
-    private lateinit var cbLockRotation: CheckBox
+    private lateinit var cbAllowUnlock: CompoundButton
+    private lateinit var cbLockRotation: CompoundButton
     private lateinit var btnStartLock: Button
     private val requestNotificationPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -49,9 +49,9 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.layout)
-        cbAllowUnlock = findViewById<CheckBox>(R.id.cbAllowUnlock)
-        btnStartLock = findViewById<Button>(R.id.btnStartLock)
-        cbLockRotation = findViewById<CheckBox>(R.id.cbLockRotation)
+        cbAllowUnlock = findViewById(R.id.cbAllowUnlock)
+        btnStartLock = findViewById(R.id.btnStartLock)
+        cbLockRotation = findViewById(R.id.cbLockRotation)
 
         // 1. load preferences
         val sharedPrefs = getSharedPreferences("ChildLockPrefs", Context.MODE_PRIVATE)
