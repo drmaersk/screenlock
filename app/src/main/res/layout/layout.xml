@@ -146,5 +146,19 @@
             android:paddingBottom="14dp"
             app:cornerRadius="12dp" />
 
+        <!-- Exit button — only visible when service is running -->
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnExit"
+            style="@style/Widget.Material3.Button.OutlinedButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Exit App"
+            android:textAppearance="?attr/textAppearanceLabelLarge"
+            android:paddingTop="14dp"
+            android:paddingBottom="14dp"
+            android:layout_marginTop="12dp"
+            android:visibility="visible"
+            app:cornerRadius="12dp" />
+
     </LinearLayout>
 </ScrollView>

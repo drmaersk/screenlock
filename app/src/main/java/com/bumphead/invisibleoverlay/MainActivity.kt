@@ -22,6 +22,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var cbAllowUnlock: CompoundButton
     private lateinit var cbLockRotation: CompoundButton
     private lateinit var btnStartLock: Button
+    private lateinit var btnExit: Button
     private val requestNotificationPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { isGranted: Boolean ->
@@ -52,6 +53,12 @@ class MainActivity : AppCompatActivity() {
         cbAllowUnlock = findViewById(R.id.cbAllowUnlock)
         btnStartLock = findViewById(R.id.btnStartLock)
         cbLockRotation = findViewById(R.id.cbLockRotation)
+        btnExit = findViewById(R.id.btnExit)
+
+        btnExit.setOnClickListener {
+            stopService(Intent(this, ChildLockService::class.java))
+            finishAffinity()
+        }
 
         // 1. load preferences
         val sharedPrefs = getSharedPreferences("ChildLockPrefs", Context.MODE_PRIVATE)
@@ -70,9 +77,11 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        // Check the flag from the Service
         if (ChildLockService.isRunning) {
             btnStartLock.text = "Reload"
+            startService(Intent(this, ChildLockService::class.java).apply {
+                action = ChildLockService.ACTION_RESET
+            })
         } else {
             btnStartLock.text = "Start Child Lock"
         }

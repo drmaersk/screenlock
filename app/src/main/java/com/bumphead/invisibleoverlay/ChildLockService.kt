@@ -49,6 +49,8 @@ class ChildLockService : Service() {
     private val backCallback = OnBackInvokedCallback { /* consume — do nothing */ }
     private var isBackCallbackRegistered = false
 
+    private var isFabAdded = false
+
     // Drag state
     private var fabInitialX = 0
     private var fabInitialY = 0
@@ -61,6 +63,7 @@ class ChildLockService : Service() {
         const val ACTION_TOGGLE_LOCK = "ACTION_TOGGLE_LOCK"
         const val ACTION_EXIT_APP = "ACTION_EXIT_APP"
         const val ACTION_NOTIFICATION_DISMISSED = "ACTION_NOTIFICATION_DISMISSED"
+        const val ACTION_RESET = "ACTION_RESET"
         var isRunning = false
     }
 
@@ -91,7 +94,8 @@ class ChildLockService : Service() {
             ACTION_FORCE_LOCK -> setBlockingState(true)
             ACTION_TOGGLE_LOCK -> setBlockingState(!isTouchBlocked)
             ACTION_EXIT_APP, ACTION_NOTIFICATION_DISMISSED -> cleanupAndExit()
-            else -> { if (isTouchBlocked) setBlockingState(true) }
+            ACTION_RESET -> setBlockingState(false)
+            else -> setBlockingState(false)
         }
         return START_STICKY
     }
@@ -273,6 +277,7 @@ class ChildLockService : Service() {
                         if (isTouchBlocked) {
                             // Locked: just hide the FAB, overlay stays active
                             windowManager.removeView(fabView)
+                            isFabAdded = false
                         } else {
                             // Unlocked: stop the service entirely
                             cleanupAndExit()
@@ -298,6 +303,7 @@ class ChildLockService : Service() {
         }
 
         windowManager.addView(fabView, fabParams)
+        isFabAdded = true
     }
 
     private fun setBlockingState(blocked: Boolean) {
@@ -382,6 +388,10 @@ class ChildLockService : Service() {
                 fabView.systemGestureExclusionRects = emptyList()
             }
 
+            if (!isFabAdded) {
+                windowManager.addView(fabView, fabParams)
+                isFabAdded = true
+            }
             fabView.visibility = View.VISIBLE
             fabView.setImageResource(R.drawable.ic_lock_open)
             fabView.background = GradientDrawable().apply {
@@ -425,6 +435,11 @@ class ChildLockService : Service() {
             getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
         }
 
+        val mainActivityIntent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
+        }
+        val pendingMainIntent = PendingIntent.getActivity(this, 3, mainActivityIntent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+
         val toggleIntent = Intent(this, ChildLockService::class.java).apply { action = ACTION_TOGGLE_LOCK }
         val pendingToggleIntent = PendingIntent.getService(this, 0, toggleIntent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
 
@@ -436,6 +451,7 @@ class ChildLockService : Service() {
 
         val builder = NotificationCompat.Builder(this, channelId)
             .setSmallIcon(R.drawable.ic_lock)
+            .setContentIntent(pendingMainIntent)
             .setOngoing(true)
             .setAutoCancel(false)
             .setDeleteIntent(pendingDismissIntent)
