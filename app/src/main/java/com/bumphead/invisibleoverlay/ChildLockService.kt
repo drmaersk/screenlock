@@ -15,11 +15,14 @@ import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.IBinder
 import android.view.Gravity
+import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
 import android.widget.ImageView
 import android.widget.Toast
+import android.window.OnBackInvokedCallback
+import android.window.OnBackInvokedDispatcher
 import androidx.core.app.NotificationCompat
 
 class ChildLockService : Service() {
@@ -32,10 +35,19 @@ class ChildLockService : Service() {
     private lateinit var overlayParams: WindowManager.LayoutParams
     private lateinit var fabParams: WindowManager.LayoutParams
 
+    // Dismiss target shown at bottom-center while dragging (unlocked only)
+    private lateinit var dismissView: ImageView
+    private lateinit var dismissParams: WindowManager.LayoutParams
+    private var isDismissViewAdded = false
+
 
     private var isTouchBlocked = false
     private var allowOnScreenUnlock = true
     private var lockRotation = true
+
+    // Back gesture interception
+    private val backCallback = OnBackInvokedCallback { /* consume — do nothing */ }
+    private var isBackCallbackRegistered = false
 
     // Drag state
     private var fabInitialX = 0
@@ -64,6 +76,7 @@ class ChildLockService : Service() {
         lockRotation = sharedPrefs.getBoolean("LOCK_ROTATION", true)
 
         createOverlayView()
+        createDismissView()
         createFabView()
         startForegroundServiceWithNotification()
         setBlockingState(false)
@@ -85,11 +98,17 @@ class ChildLockService : Service() {
 
     private fun createOverlayView() {
         overlayView = View(this)
+        overlayView.isFocusable = true
+        overlayView.isFocusableInTouchMode = true
         overlayView.setOnTouchListener { _, event ->
             if (isTouchBlocked && event.action == MotionEvent.ACTION_DOWN) {
                 // Block touches
             }
             isTouchBlocked
+        }
+        // Fallback: consume the back key directly when focused
+        overlayView.setOnKeyListener { _, keyCode, _ ->
+            isTouchBlocked && keyCode == KeyEvent.KEYCODE_BACK
         }
 
         overlayParams = WindowManager.LayoutParams(
@@ -109,6 +128,86 @@ class ChildLockService : Service() {
 
         // Add the overlay now so the FAB (added next) is always on top in z-order
         windowManager.addView(overlayView, overlayParams)
+    }
+
+    private fun createDismissView() {
+        val density = resources.displayMetrics.density
+        val size = (56 * density).toInt()
+        val padding = (14 * density).toInt()
+        val bottomMargin = (80 * density).toInt()
+
+        dismissView = ImageView(this)
+        dismissView.setImageResource(R.drawable.ic_close)
+        dismissView.setPadding(padding, padding, padding, padding)
+        dismissView.background = GradientDrawable().apply {
+            shape = GradientDrawable.OVAL
+            setColor(Color.argb(180, 100, 100, 100))
+        }
+
+        dismissParams = WindowManager.LayoutParams(
+            size, size,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                    WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
+            y = bottomMargin
+        }
+    }
+
+    private fun showDismissTarget() {
+        if (!isDismissViewAdded) {
+            windowManager.addView(dismissView, dismissParams)
+            isDismissViewAdded = true
+        }
+    }
+
+    private fun hideDismissTarget() {
+        if (isDismissViewAdded) {
+            // Reset scale
+            dismissView.scaleX = 1.0f
+            dismissView.scaleY = 1.0f
+            windowManager.removeView(dismissView)
+            isDismissViewAdded = false
+        }
+    }
+
+    private fun isFabOverDismissTarget(): Boolean {
+        val dm = resources.displayMetrics
+        val density = dm.density
+        val dismissSize = (56 * density).toInt()
+        val dismissMarginBottom = (80 * density).toInt()
+
+        val dismissCenterX = dm.widthPixels / 2
+        val dismissCenterY = dm.heightPixels - dismissMarginBottom - dismissSize / 2
+
+        val fabCenterX = fabParams.x + fabParams.width / 2
+        val fabCenterY = fabParams.y + fabParams.height / 2
+
+        val dx = (fabCenterX - dismissCenterX).toFloat()
+        val dy = (fabCenterY - dismissCenterY).toFloat()
+        val distance = kotlin.math.sqrt(dx * dx + dy * dy)
+
+        return distance < dismissSize
+    }
+
+    private fun updateDismissHighlight() {
+        if (isFabOverDismissTarget()) {
+            dismissView.background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(Color.argb(230, 198, 40, 40))
+            }
+            dismissView.scaleX = 1.2f
+            dismissView.scaleY = 1.2f
+        } else {
+            dismissView.background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(Color.argb(180, 100, 100, 100))
+            }
+            dismissView.scaleX = 1.0f
+            dismissView.scaleY = 1.0f
+        }
     }
 
     private fun createFabView() {
@@ -156,17 +255,36 @@ class ChildLockService : Service() {
                     val dy = (event.rawY - touchInitialY).toInt()
                     if (!isDragging && (kotlin.math.abs(dx) > 10 || kotlin.math.abs(dy) > 10)) {
                         isDragging = true
+                        showDismissTarget()
                     }
                     if (isDragging) {
                         fabParams.x = fabInitialX + dx
                         fabParams.y = fabInitialY + dy
                         windowManager.updateViewLayout(fabView, fabParams)
+                        updateDismissHighlight()
                         true
                     } else {
                         false
                     }
                 }
-                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                MotionEvent.ACTION_UP -> {
+                    if (isDragging && isFabOverDismissTarget()) {
+                        hideDismissTarget()
+                        if (isTouchBlocked) {
+                            // Locked: just hide the FAB, overlay stays active
+                            windowManager.removeView(fabView)
+                        } else {
+                            // Unlocked: stop the service entirely
+                            cleanupAndExit()
+                        }
+                    } else {
+                        hideDismissTarget()
+                    }
+                    isDragging = false
+                    false
+                }
+                MotionEvent.ACTION_CANCEL -> {
+                    hideDismissTarget()
                     isDragging = false
                     false
                 }
@@ -187,8 +305,13 @@ class ChildLockService : Service() {
 
         if (isTouchBlocked) {
             // === LOCKED STATE ===
-            // Remove FLAG_NOT_TOUCHABLE so the overlay blocks touches
-            overlayParams.flags = overlayParams.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
+            // Remove FLAG_NOT_TOUCHABLE so the overlay blocks touches.
+            // Remove FLAG_NOT_FOCUSABLE so the overlay receives focus and can intercept
+            // the predictive back gesture (systemGestureExclusionRects alone is not enough
+            // on Android 13+ where back gestures bypass exclusion rects).
+            overlayParams.flags = overlayParams.flags and
+                    (WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                     WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE).inv()
             overlayView.setBackgroundColor(Color.argb(10, 0, 0, 0))
 
             if (allowOnScreenUnlock) {
@@ -210,27 +333,53 @@ class ChildLockService : Service() {
                     else
                         ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
             }
-            windowManager.updateViewLayout(overlayView, overlayParams)
 
+            // Set exclusion rects BEFORE updateViewLayout so they are included in the same pass.
+            // Using displayMetrics avoids relying on view dimensions that may not be set yet.
+            // Both windows need exclusion rects: the gesture recognizer checks the topmost window
+            // at each position, so the fabView (on top of overlayView at the FAB corner) must also
+            // exclude gestures or back swipes starting near the FAB will slip through.
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                overlayView.post {
-                    overlayView.systemGestureExclusionRects = listOf(
-                        android.graphics.Rect(0, 0, overlayView.width, overlayView.height)
+                val dm = resources.displayMetrics
+                val fullScreen = android.graphics.Rect(0, 0, dm.widthPixels, dm.heightPixels)
+                overlayView.systemGestureExclusionRects = listOf(fullScreen)
+                fabView.systemGestureExclusionRects = listOf(
+                    android.graphics.Rect(0, 0, fabParams.width, fabParams.height)
+                )
+            }
+            windowManager.updateViewLayout(overlayView, overlayParams)
+            overlayView.requestFocus()
+
+            // Register OnBackInvokedCallback to consume the predictive back gesture.
+            // Must be done after the overlay is focusable and laid out.
+            overlayView.post {
+                if (!isBackCallbackRegistered) {
+                    overlayView.findOnBackInvokedDispatcher()?.registerOnBackInvokedCallback(
+                        OnBackInvokedDispatcher.PRIORITY_OVERLAY, backCallback
                     )
+                    isBackCallbackRegistered = true
                 }
             }
             Toast.makeText(this, "Shield ON", Toast.LENGTH_SHORT).show()
 
         } else {
             // === UNLOCKED STATE ===
-            // Restore FLAG_NOT_TOUCHABLE so touches pass through
-            overlayParams.flags = overlayParams.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+            // Unregister back callback before losing focus
+            if (isBackCallbackRegistered) {
+                overlayView.findOnBackInvokedDispatcher()?.unregisterOnBackInvokedCallback(backCallback)
+                isBackCallbackRegistered = false
+            }
+            // Restore FLAG_NOT_TOUCHABLE and FLAG_NOT_FOCUSABLE so touches pass through
+            overlayParams.flags = overlayParams.flags or
+                    WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
             overlayParams.screenOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
             overlayView.setBackgroundColor(Color.TRANSPARENT)
             windowManager.updateViewLayout(overlayView, overlayParams)
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 overlayView.systemGestureExclusionRects = emptyList()
+                fabView.systemGestureExclusionRects = emptyList()
             }
 
             fabView.visibility = View.VISIBLE
@@ -247,7 +396,12 @@ class ChildLockService : Service() {
     }
 
     private fun cleanupAndExit() {
+        if (isBackCallbackRegistered) {
+            overlayView.findOnBackInvokedDispatcher()?.unregisterOnBackInvokedCallback(backCallback)
+            isBackCallbackRegistered = false
+        }
         if (::overlayView.isInitialized) windowManager.removeView(overlayView)
+        hideDismissTarget()
         if (::fabView.isInitialized) windowManager.removeView(fabView)
         stopSelf()
     }
